@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Functions for computing soundscape metrics from acoustic signals.
 
 William F. Jenkins, Ph.D.
@@ -7,6 +6,7 @@ University of California San Diego
 February 2025
 """
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -116,6 +116,36 @@ def compute_metrics(dbpath: Path) -> list[Metrics]:
                 all_metrics.append(metrics)
 
     return all_metrics
+
+
+def compute_event_metrics(
+    event: dict,
+    database_path: Path,
+) -> None:
+    event_name = event["name"]
+    event_start = event["start"][0:10]
+    event_dir = f"{event_name}_{event_start}"
+
+    logging.info(f"[{event_name}] Computing metrics for event.")
+
+    savepath = database_path / event_dir
+    savepath.mkdir(parents=True, exist_ok=True)
+
+    for sensor in event["sensors"]:
+        sensor_name = sensor["name"]
+        logging.info(f"[{event_name}][{sensor_name}] Computing metrics for sensor.")
+
+        dbpath = (
+            savepath / f"detections_{sensor_name}.hdf5"
+        )
+
+        all_metrics = compute_metrics(dbpath)
+        savename = savepath / f"metrics_{sensor_name}.csv"
+        save_metrics_to_csv(all_metrics, savename)
+
+        logging.info(f"[{event_name}][{sensor_name}] Metrics saved to {savename}.")
+        logging.info(f"[{event_name}][{sensor_name}] Completed sensor.")
+    logging.info(f"[{event_name}] Completed event.")
 
 
 def compute_pulse_metrics(
