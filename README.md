@@ -10,7 +10,9 @@ This repository contains core code for the RODEO II project, which is focused on
 The code is designed to work with data collected from various stations, and it includes scripts for inventorying data files, detecting pile driving events, and computing soundscape metrics.
 
 The code is provided as a Python package.
-Application of the code is found in accompanying repositories.
+Application of the code is found in accompanying repositories:
+- [South Fork Wind](https://github.com/NeptuneProjects/RODEO-II_SouthForkWind)
+- [Vineyard Wind](https://github.com/NeptuneProjects/RODEO-II_VineyardWind)
 
 ## Installation
 
