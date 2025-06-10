@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Utility functions for the RODEO package.
 
 William F. Jenkins, Ph.D.
@@ -13,10 +12,8 @@ from typing import Sequence
 
 import h5py
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
 import pyproj
-import scipy.fft as fft
 
 import rodeo
 
