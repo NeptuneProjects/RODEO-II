@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools >= 79.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rodeo" # Replace with your desired project name
+version = "0.0.1"
+description = "A local Python package for project imports"
+authors = [{ name = "William F. Jenkins", email = "wfjenkins@ucsd.edu" }]
+dependencies = [
+    "bathyreq",
+    "cmasher",
+    "cmocean",
+    "h5py",
+    "juliacall",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "polars",
+    "pyproj",
+    "scipy",
+    "tqdm",
+    "TritonOA @ git+ssh://git@github.com/TritonOA/TritonOA.git",
+] # Add any dependencies here
+requires-python = "== 3.12.*"
+
+[tool.setuptools.packages.find]
+where = ["src"] # Specifies where to find the package
