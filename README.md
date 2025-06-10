@@ -16,5 +16,5 @@ Application of the code is found in accompanying repositories.
 
 The package can be installed using `pip`:
 ```bash
-pip install rodeo2-core
+pip install git@github.com:NeptuneProjects/RODEO-II.git
 ```
