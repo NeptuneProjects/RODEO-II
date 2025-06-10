@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Detection module for acoustic data processing.
 
 This module provides functions to detect acoustic pulses in time series data. The
@@ -18,10 +17,14 @@ import uuid
 
 import h5py
 import numpy as np
+import pandas as pd
 from scipy import signal
 from tqdm import tqdm
+from tritonoa.data.reader import read_inventory
 from tritonoa.data.stream import DataStream, DataStreamStats
 from tritonoa.data.time import TIME_PRECISION
+
+from rodeo.utils import compute_range
 
 
 @dataclass
@@ -122,6 +125,89 @@ def detect_pulses(
     )
     peaks, _ = signal.find_peaks(chf, height=threshold, distance=distance * fs)
     return time[peaks]
+
+
+def event_detections(
+    inv_config: dict,
+    event: dict,
+    df_equip: pd.DataFrame,
+    df_turb: pd.DataFrame,
+    pulse_filter: str | None = None,
+    pulse_filt_freq: float | None = None,
+) -> None:
+
+    def _compute_range(
+        df_equip: pd.DataFrame, df_turb: pd.DataFrame, sensor_name: str, event_site: str
+    ) -> float:
+        # Compute the range between the sensor and the event site
+        site_lon = df_turb.loc[df_turb["Turbine"] == event_site, "lon"].values[0]
+        site_lat = df_turb.loc[df_turb["Turbine"] == event_site, "lat"].values[0]
+        sensor_lon = df_equip.loc[
+            df_equip["Name"] == sensor_name, "Longitude [dd]"
+        ].values[0]
+        sensor_lat = df_equip.loc[
+            df_equip["Name"] == sensor_name, "Latitude [dd]"
+        ].values[0]
+
+        return compute_range(sensor_lon, sensor_lat, site_lon, site_lat)
+
+    event_name = event["name"]
+    event_site = event["site"]
+    event_start = event["start"][0:10]
+
+    logging.info(f"Analyzing event {event_name}.")
+
+    path = Path.cwd() / "data" / "events" / f"{event_name}_{event_start}"
+    path.mkdir(parents=True, exist_ok=True)
+
+    for sensor in event["sensors"]:
+        sensor_name = sensor["name"]
+        sensor_dec_factor = sensor.get("dec_factor", None)
+        sensor_filter = sensor.get("filter", None)
+        sensor_freq = sensor.get("freq", None)
+        sensor_channels = sensor["channels"]
+
+        logging.info(f"-Analayzing sensor {sensor_name}.")
+
+        ds = read_inventory(
+            file_path=Path(inv_config[sensor_name]["data"]["destination"]),
+            time_start=np.datetime64(event["start"], TIME_PRECISION),
+            time_end=np.datetime64(event["end"], TIME_PRECISION),
+            channels=[i["channel"] for i in sensor_channels],
+        )
+        logging.info(f"-Data loaded from disk.")
+
+        r = _compute_range(df_equip, df_turb, sensor_name, event_site)
+
+        # Run analyses for individual pulses
+        dbpath = path / f"detections_{sensor_name}.hdf5"
+        process_stream(
+            ds,
+            pulse_start=[d["pulse_start"] for d in sensor["channels"]],
+            pulse_end=[d["pulse_end"] for d in sensor["channels"]],
+            stwin=[d["stwin"] for d in sensor["channels"]],
+            ltwin=[d["ltwin"] for d in sensor["channels"]],
+            threshold=[d["threshold"] for d in sensor["channels"]],
+            distance=[d["distance"] for d in sensor["channels"]],
+            taper=sensor["taper"],
+            pulse_filter_type=pulse_filter,
+            pulse_filter_freq=pulse_filt_freq,
+            detector_filter_type=sensor_filter,
+            detector_filter_freq=sensor_freq,
+            detector_decimate_factor=sensor_dec_factor,
+            station=sensor_name,
+            dbpath=dbpath,
+            metadata={
+                "event_name": event_name,
+                "event_site": event_site,
+                "range": r,
+                "filter": pulse_filter,
+                "filter_freq": pulse_filt_freq,
+            },
+        )
+
+        logging.info(f"-Completed sensor {sensor_name}.")
+    logging.info(f"Completed {event_name}.")
 
 
 def parse_detection(grp: h5py.Group) -> DataStreamStats:
