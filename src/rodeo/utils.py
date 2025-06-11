@@ -5,6 +5,7 @@ Scripps Institution of Oceanography
 University of California San Diego
 February 2025
 """
+
 import importlib.resources as pkg_resources
 import logging
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Sequence
 import h5py
 import numpy as np
 import pandas as pd
+import polars as pl
 import pyproj
 
 import rodeo
@@ -22,6 +24,33 @@ logging_kwargs = {
     "format": "%(asctime)s [%(levelname)s] %(message)s",
     "datefmt": "%Y-%m-%d %H:%M:%S",
 }
+
+
+def add_range_columns(df: pl.DataFrame, sensor_data: pl.DataFrame) -> pl.DataFrame:
+    STATIONS = ["SHRU921_Tetra", "SHRU905_VLA1", "SHRU920_VLA2"]
+
+    for station in STATIONS:
+        column_name = f"R to {station} (m)"
+        if column_name in df.columns:
+            continue
+
+        lon1 = sensor_data.filter(sensor_data["Name"] == station)[
+            "Longitude [dd]"
+        ].to_numpy()[0]
+        lat1 = sensor_data.filter(sensor_data["Name"] == station)[
+            "Latitude [dd]"
+        ].to_numpy()[0]
+
+        df = df.with_columns(
+            pl.struct(["Lon", "Lat"])
+            .map_elements(
+                lambda row: compute_range(row["Lon"], row["Lat"], lon1, lat1),
+                return_dtype=pl.Float64,
+            )
+            .alias(column_name)
+        )
+
+    return df
 
 
 def get_welch() -> tuple[callable, bool]:
