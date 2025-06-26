@@ -14,6 +14,7 @@ module CrossCorr
 
 using DSP
 using LinearAlgebra
+using ProgressBar
 # using ProgressMeter
 using Statistics
 
