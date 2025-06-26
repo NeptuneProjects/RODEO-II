@@ -334,6 +334,8 @@ def initialize_julia(modules: str | Sequence[str]) -> object:
         modules = [modules]
 
     for module in modules:
+        if jl.eval(f"@isdefined {module}"):
+            continue
         julia_path = pkg_resources.files(rodeo).joinpath(f"{module}.jl")
         jl.include(str(julia_path))
 
