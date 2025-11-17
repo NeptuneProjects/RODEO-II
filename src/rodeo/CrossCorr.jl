@@ -42,28 +42,27 @@ function corr_matrix(data::Matrix{Float64})::Matrix{Float64}
     rows = size(data, 1)
     corr = Matrix{Float64}(undef, rows, rows)
 
-    results = Vector{Tuple{Int,Int,Float64}}()
-    results_lock = ReentrantLock()
+    # Pre-normalize all signals once to avoid redundant computations
+    normalized_data = similar(data)
+    norms = Vector{Float64}(undef, rows)
+
+    for i in 1:rows
+        sig = @view data[i, :]
+        normalized_data[i, :] = (sig .- mean(sig)) ./ std(sig)
+        norms[i] = sqrt(sum(normalized_data[i, :] .^ 2))
+    end
 
     pbar = ProgressBar(1:rows)
     set_description(pbar, "Computing cross-correlations between signals")
 
     Threads.@threads for i in pbar
-        local_results = Vector{Tuple{Int,Int,Float64}}()
-        sig1 = data[i, :]
-        for j in i:rows
-            sig2 = data[j, :]
-            ccf = cross_corr(sig1, sig2)
-            push!(local_results, (i, j, ccf))
+        sig1 = @view normalized_data[i, :]
+        @inbounds for j in i:rows
+            sig2 = @view normalized_data[j, :]
+            ccf = maximum(xcorr(sig1, sig2)) / (norms[i] * norms[j])
+            corr[i, j] = ccf
+            corr[j, i] = ccf
         end
-        lock(results_lock) do
-            append!(results, local_results)
-        end
-    end
-
-    for (i, j, ccf) in results
-        corr[i, j] = ccf
-        corr[j, i] = ccf
     end
 
     return corr
@@ -83,10 +82,11 @@ function dt_matrix(times::Vector{Float64})::Matrix{Float64}
     set_description(pbar, "Computing time differences between signals")
 
     Threads.@threads for i in pbar
-        for j in i:rows
+        @inbounds for j in i:rows
             dt[i, j] = times[j] - times[i]
             dt[j, i] = -dt[i, j]
         end
+        dt[i, i] = 0.0  # Ensure diagonal is explicitly zero
     end
     return dt
 end
