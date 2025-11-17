@@ -13,6 +13,7 @@ February 2025
 module CrossCorr
 
 using DSP
+using FFTW
 using LinearAlgebra
 using ProgressBars
 using Statistics
@@ -40,6 +41,7 @@ between pairs of signals.
 """
 function corr_matrix(data::Matrix{Float64})::Matrix{Float64}
     rows = size(data, 1)
+    n_samples = size(data, 2)
     corr = Matrix{Float64}(undef, rows, rows)
 
     # Pre-normalize all signals once to avoid redundant computations
@@ -52,14 +54,55 @@ function corr_matrix(data::Matrix{Float64})::Matrix{Float64}
         norms[i] = sqrt(sum(normalized_data[i, :] .^ 2))
     end
 
+    # Pre-allocate FFT buffers per thread to avoid repeated allocations
+    n_fft = nextpow(2, 2 * n_samples - 1)  # FFT size for cross-correlation
+    n_threads = Threads.nthreads()
+
+    # Create buffers for each thread
+    fft_buf1 = [zeros(ComplexF64, n_fft) for _ in 1:n_threads]
+    fft_buf2 = [zeros(ComplexF64, n_fft) for _ in 1:n_threads]
+    result_buf = [zeros(Float64, n_fft) for _ in 1:n_threads]
+
+    # Create FFT plans (reusable across all computations)
+    plan_fwd = plan_fft!(fft_buf1[1])
+    plan_inv = plan_ifft!(fft_buf1[1])
+
     pbar = ProgressBar(1:rows)
     set_description(pbar, "Computing cross-correlations between signals")
 
     Threads.@threads for i in pbar
+        tid = Threads.threadid()
+        buf1 = fft_buf1[tid]
+        buf2 = fft_buf2[tid]
+        result = result_buf[tid]
+
         sig1 = @view normalized_data[i, :]
+
         @inbounds for j in i:rows
             sig2 = @view normalized_data[j, :]
-            ccf = maximum(xcorr(sig1, sig2)) / (norms[i] * norms[j])
+
+            # Zero out buffers
+            fill!(buf1, 0.0)
+            fill!(buf2, 0.0)
+
+            # Copy signals into buffers
+            buf1[1:n_samples] .= sig1
+            buf2[1:n_samples] .= sig2
+
+            # Compute FFTs in-place
+            mul!(buf1, plan_fwd, buf1)
+            mul!(buf2, plan_fwd, buf2)
+
+            # Multiply: FFT(sig1) .* conj(FFT(sig2))
+            buf1 .= buf1 .* conj.(buf2)
+
+            # Inverse FFT to get cross-correlation
+            mul!(buf1, plan_inv, buf1)
+
+            # Extract real part and find maximum
+            result .= real.(buf1)
+            ccf = maximum(result) / (norms[i] * norms[j])
+
             corr[i, j] = ccf
             corr[j, i] = ccf
         end
