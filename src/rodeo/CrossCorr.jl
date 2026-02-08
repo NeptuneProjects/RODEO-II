@@ -56,12 +56,12 @@ function corr_matrix(data::Matrix{Float64})::Matrix{Float64}
 
     # Pre-allocate FFT buffers per thread to avoid repeated allocations
     n_fft = nextpow(2, 2 * n_samples - 1)  # FFT size for cross-correlation
-    n_threads = Threads.nthreads()
+    max_tid = Threads.maxthreadid()
 
-    # Create buffers for each thread
-    fft_buf1 = [zeros(ComplexF64, n_fft) for _ in 1:n_threads]
-    fft_buf2 = [zeros(ComplexF64, n_fft) for _ in 1:n_threads]
-    result_buf = [zeros(Float64, n_fft) for _ in 1:n_threads]
+    # Create buffers for each thread (use maxthreadid to handle thread pool size)
+    fft_buf1 = [zeros(ComplexF64, n_fft) for _ in 1:max_tid]
+    fft_buf2 = [zeros(ComplexF64, n_fft) for _ in 1:max_tid]
+    result_buf = [zeros(Float64, n_fft) for _ in 1:max_tid]
 
     # Create FFT plans (reusable across all computations)
     plan_fwd = plan_fft!(fft_buf1[1])
