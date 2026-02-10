@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rodeo" # Replace with your desired project name
-version = "0.0.5"
+version = "0.0.6"
 description = "A local Python package for project imports"
 authors = [{ name = "William F. Jenkins", email = "wfjenkins@ucsd.edu" }]
 dependencies = [

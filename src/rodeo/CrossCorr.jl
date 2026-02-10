@@ -18,7 +18,7 @@ using LinearAlgebra
 using ProgressBars
 using Statistics
 
-export corr_matrix, dt_matrix
+export corr_matrix, dt_matrix, lag_matrix
 
 """
     cross_corr(sig1::Vector{Float64}, sig2::Vector{Float64})::Float64
@@ -34,15 +34,21 @@ end
 
 
 """
-    corr_matrix(data::Matrix{Float64})::Matrix{Float64}
+    corr_matrix(data::Matrix{Float64})::Tuple{Matrix{Float64}, Matrix{Int}}
 
 Compute the matrix containing maximum values of the cross-correlation functions
-between pairs of signals.
+between pairs of signals, and the sample lags at which they occur.
+
+Returns:
+- corr: Matrix of maximum cross-correlation values
+- shifts: Matrix of sample lags at which maximum correlation occurs
+  (positive lag means signal j leads signal i)
 """
-function corr_matrix(data::Matrix{Float64})::Matrix{Float64}
+function corr_matrix(data::Matrix{Float64})::Tuple{Matrix{Float64},Matrix{Int}}
     rows = size(data, 1)
     n_samples = size(data, 2)
     corr = Matrix{Float64}(undef, rows, rows)
+    shifts = Matrix{Int}(undef, rows, rows)
 
     # Pre-normalize all signals once to avoid redundant computations
     normalized_data = similar(data)
@@ -99,16 +105,26 @@ function corr_matrix(data::Matrix{Float64})::Matrix{Float64}
             # Inverse FFT to get cross-correlation
             mul!(buf1, plan_inv, buf1)
 
-            # Extract real part and find maximum
+            # Extract real part and find maximum and its location
             result .= real.(buf1)
-            ccf = maximum(result) / (norms[i] * norms[j])
+            max_idx = argmax(result)
+            ccf = result[max_idx] / (norms[i] * norms[j])
+
+            # Convert FFT index to actual lag
+            # Index 1 corresponds to lag -(n_samples-1)
+            # Index n_samples corresponds to lag 0
+            lag = max_idx - n_samples
 
             corr[i, j] = ccf
             corr[j, i] = ccf
+            shifts[i, j] = lag
+            shifts[j, i] = -lag
         end
+        corr[i, i] = 1.0  # Self-correlation is always 1
+        shifts[i, i] = 0  # Zero lag for self-correlation
     end
 
-    return corr
+    return corr, shifts
 end
 
 
@@ -132,6 +148,29 @@ function dt_matrix(times::Vector{Float64})::Matrix{Float64}
         dt[i, i] = 0.0  # Ensure diagonal is explicitly zero
     end
     return dt
+end
+
+
+"""
+    lag_matrix(n::Int)::Matrix{Int}
+
+Compute the matrix containing sample lags between pairs of indices.
+For indices i and j, lag_matrix[i,j] = j - i.
+"""
+function lag_matrix(n::Int)::Matrix{Int}
+    lags = Matrix{Int}(undef, n, n)
+
+    pbar = ProgressBar(1:n)
+    set_description(pbar, "Computing sample lags between signals")
+
+    Threads.@threads for i in pbar
+        @inbounds for j in i:n
+            lags[i, j] = j - i
+            lags[j, i] = i - j
+        end
+        lags[i, i] = 0  # Ensure diagonal is explicitly zero
+    end
+    return lags
 end
 
 
