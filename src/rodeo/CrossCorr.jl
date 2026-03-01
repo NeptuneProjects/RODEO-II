@@ -15,7 +15,7 @@ module CrossCorr
 using DSP
 using FFTW
 using LinearAlgebra
-using ProgressBars
+using ProgressMeter
 using Statistics
 
 export corr_matrix, dt_matrix, lag_matrix
@@ -69,59 +69,85 @@ function corr_matrix(data::Matrix{Float64})::Tuple{Matrix{Float64},Matrix{Int}}
     fft_buf2 = [zeros(ComplexF64, n_fft) for _ in 1:max_tid]
     result_buf = [zeros(Float64, n_fft) for _ in 1:max_tid]
 
-    # Create FFT plans (reusable across all computations)
-    plan_fwd = plan_fft!(fft_buf1[1])
-    plan_inv = plan_ifft!(fft_buf1[1])
+    # Create separate FFT plans per thread for thread safety
+    # Use FFTW.ESTIMATE to avoid expensive planning that can accumulate state
+    plans_fwd = [plan_fft!(fft_buf1[t], flags=FFTW.ESTIMATE) for t in 1:max_tid]
+    plans_inv = [plan_ifft!(fft_buf1[t], flags=FFTW.ESTIMATE) for t in 1:max_tid]
 
-    pbar = ProgressBar(1:rows)
-    set_description(pbar, "Computing cross-correlations between signals")
+    # Work-stealing with atomic counter for perfect load balancing
+    # Each thread grabs one row at a time (finest granularity)
+    # Start from last row (least work) to first row (most work)
+    # This ensures all threads stay busy until completion with no idle time
+    next_row = Threads.Atomic{Int}(rows)
+    progress = Progress(rows, dt=0.5, desc="Computing cross-correlations: ")
 
-    Threads.@threads for i in pbar
+    Threads.@threads for _ in 1:Threads.nthreads()
         tid = Threads.threadid()
         buf1 = fft_buf1[tid]
         buf2 = fft_buf2[tid]
         result = result_buf[tid]
+        plan_fwd = plans_fwd[tid]
+        plan_inv = plans_inv[tid]
 
-        sig1 = @view normalized_data[i, :]
+        while true
+            # Atomically grab next row (work-stealing with chunk size = 1)
+            i = Threads.atomic_add!(next_row, -1)
+            if i < 1
+                break  # No more work
+            end
 
-        @inbounds for j in i:rows
-            sig2 = @view normalized_data[j, :]
+            sig1 = @view normalized_data[i, :]
 
-            # Zero out buffers
-            fill!(buf1, 0.0)
-            fill!(buf2, 0.0)
+            @inbounds for j in i:rows
+                sig2 = @view normalized_data[j, :]
 
-            # Copy signals into buffers
-            buf1[1:n_samples] .= sig1
-            buf2[1:n_samples] .= sig2
+                # Zero out buffers and copy signals
+                # Use explicit loops to avoid slice allocation
+                @inbounds for k in 1:n_samples
+                    buf1[k] = sig1[k]
+                    buf2[k] = sig2[k]
+                end
+                @inbounds for k in (n_samples+1):n_fft
+                    buf1[k] = 0.0
+                    buf2[k] = 0.0
+                end
 
-            # Compute FFTs in-place
-            mul!(buf1, plan_fwd, buf1)
-            mul!(buf2, plan_fwd, buf2)
+                # Compute FFTs in-place
+                mul!(buf1, plan_fwd, buf1)
+                mul!(buf2, plan_fwd, buf2)
 
-            # Multiply: FFT(sig1) .* conj(FFT(sig2))
-            buf1 .= buf1 .* conj.(buf2)
+                # Multiply: FFT(sig1) .* conj(FFT(sig2))
+                # Use in-place conjugation to avoid allocation
+                @inbounds for k in eachindex(buf1, buf2)
+                    buf1[k] = buf1[k] * conj(buf2[k])
+                end
 
-            # Inverse FFT to get cross-correlation
-            mul!(buf1, plan_inv, buf1)
+                # Inverse FFT to get cross-correlation
+                mul!(buf1, plan_inv, buf1)
 
-            # Extract real part and find maximum and its location
-            result .= real.(buf1)
-            max_idx = argmax(result)
-            ccf = result[max_idx] / (norms[i] * norms[j])
+                # Extract real part and find maximum (avoid allocation)
+                @inbounds for k in eachindex(result, buf1)
+                    result[k] = real(buf1[k])
+                end
+                max_idx = argmax(result)
+                ccf = result[max_idx] / (norms[i] * norms[j])
 
-            # Convert FFT index to actual lag
-            # Index 1 corresponds to lag -(n_samples-1)
-            # Index n_samples corresponds to lag 0
-            lag = max_idx - n_samples
+                # Convert FFT index to actual lag
+                # Index 1 corresponds to lag -(n_samples-1)
+                # Index n_samples corresponds to lag 0
+                lag = max_idx - n_samples
 
-            corr[i, j] = ccf
-            corr[j, i] = ccf
-            shifts[i, j] = lag
-            shifts[j, i] = -lag
+                corr[i, j] = ccf
+                corr[j, i] = ccf
+                shifts[i, j] = lag
+                shifts[j, i] = -lag
+            end
+            corr[i, i] = 1.0  # Self-correlation is always 1
+            shifts[i, i] = 0  # Zero lag for self-correlation
+
+            # Update progress (thread-safe)
+            next!(progress)
         end
-        corr[i, i] = 1.0  # Self-correlation is always 1
-        shifts[i, i] = 0  # Zero lag for self-correlation
     end
 
     return corr, shifts
@@ -137,15 +163,25 @@ function dt_matrix(times::Vector{Float64})::Matrix{Float64}
     rows = length(times)
     dt = Matrix{Float64}(undef, rows, rows)
 
-    pbar = ProgressBar(1:rows)
-    set_description(pbar, "Computing time differences between signals")
+    # Work-stealing with atomic counter for perfect load balancing
+    next_row = Threads.Atomic{Int}(rows)
+    progress = Progress(rows, dt=0.5, desc="Computing time differences: ")
 
-    Threads.@threads for i in pbar
-        @inbounds for j in i:rows
-            dt[i, j] = times[j] - times[i]
-            dt[j, i] = -dt[i, j]
+    Threads.@threads for _ in 1:Threads.nthreads()
+        while true
+            i = Threads.atomic_add!(next_row, -1)
+            if i < 1
+                break
+            end
+
+            @inbounds for j in i:rows
+                dt[i, j] = times[j] - times[i]
+                dt[j, i] = -dt[i, j]
+            end
+            dt[i, i] = 0.0  # Ensure diagonal is explicitly zero
+
+            next!(progress)
         end
-        dt[i, i] = 0.0  # Ensure diagonal is explicitly zero
     end
     return dt
 end
@@ -160,15 +196,25 @@ For indices i and j, lag_matrix[i,j] = j - i.
 function lag_matrix(n::Int)::Matrix{Int}
     lags = Matrix{Int}(undef, n, n)
 
-    pbar = ProgressBar(1:n)
-    set_description(pbar, "Computing sample lags between signals")
+    # Work-stealing with atomic counter for perfect load balancing
+    next_row = Threads.Atomic{Int}(n)
+    progress = Progress(n, dt=0.5, desc="Computing sample lags: ")
 
-    Threads.@threads for i in pbar
-        @inbounds for j in i:n
-            lags[i, j] = j - i
-            lags[j, i] = i - j
+    Threads.@threads for _ in 1:Threads.nthreads()
+        while true
+            i = Threads.atomic_add!(next_row, -1)
+            if i < 1
+                break
+            end
+
+            @inbounds for j in i:n
+                lags[i, j] = j - i
+                lags[j, i] = i - j
+            end
+            lags[i, i] = 0  # Ensure diagonal is explicitly zero
+
+            next!(progress)
         end
-        lags[i, i] = 0  # Ensure diagonal is explicitly zero
     end
     return lags
 end
