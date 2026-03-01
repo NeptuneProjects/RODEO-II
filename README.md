@@ -21,7 +21,7 @@ The package can be installed using `pip`:
 pip install git@github.com:NeptuneProjects/RODEO-II.git
 ```
 
-## Support
+## Acknowledgments
 
 Study concept, oversight, and funding were provided by the U.S. Department of the Interior, Bureau of Ocean Energy Management, Environmental Studies Program, Real-Time Opportunity for Development Environmental Observations (RODEO) Program, Washington, DC under Contract Number 140M0121D0003\_CTO 140M0122F0030.
 Dr. David Bigger, Contracting Officers Representative.
