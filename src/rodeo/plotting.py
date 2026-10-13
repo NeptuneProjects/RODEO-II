@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Helper functions for plotting data.
 
 William F. Jenkins, Ph.D.
@@ -7,22 +6,21 @@ University of California San Diego
 February 2025
 """
 
-
-from pathlib import Path
 import re
-from typing import Sequence
+from collections.abc import Sequence
+from pathlib import Path
 
 import bathyreq
 import cmasher as cmr
-import cmocean as cmo
+import cmocean as cmo  # noqa: F401
 import matplotlib.dates as mdates
-import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
-from mpl_toolkits.basemap import Basemap
 import numpy as np
 import pandas as pd
 import polars as pl
+from matplotlib import gridspec
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
+from mpl_toolkits.basemap import Basemap
 from scipy import signal
 from scipy.interpolate import interp1d
 from tritonoa.data.stream import DataStream
@@ -201,10 +199,12 @@ def plot_bathy(
 def plot_ctd_profiles(
     df: pd.DataFrame,
     figsize: tuple[float, float] = (4, 3),
-    gridspec_kw: dict = {"wspace": 0.2},
+    gridspec_kw: dict | None = None,
     dpi: int = 150,
     **plot_kwargs,
 ) -> plt.Figure:
+    if gridspec_kw is None:
+        gridspec_kw = {"wspace": 0.2}
     fig, axs = plt.subplots(figsize=figsize, ncols=3, gridspec_kw=gridspec_kw, dpi=dpi)
     ylim = (0, 35)
 
@@ -438,7 +438,6 @@ def plot_event_metrics(df: pl.DataFrame, savepath: Path) -> None:
         event_end = df.filter(pl.col("event_name") == event)["time_end"].unique().max()
 
         for i, (metric_key, metric_name) in enumerate(METRICS.items()):
-
             min_val = np.inf
             max_val = 0.0
 
@@ -469,10 +468,8 @@ def plot_event_metrics(df: pl.DataFrame, savepath: Path) -> None:
                         if not total_strikes:
                             total_strikes = len(time)
 
-                        if max_val < max(data):
-                            max_val = max(data)
-                        if min_val > min(data):
-                            min_val = min(data)
+                        max_val = max(max_val, max(data))
+                        min_val = min(min_val, min(data))
 
                         ax.scatter(
                             time,
@@ -523,8 +520,8 @@ def plot_event_metrics(df: pl.DataFrame, savepath: Path) -> None:
                 axs[i, j].set_ylim(min_val - ylim_margin, max_val + ylim_margin)
 
         fig.suptitle(
-            f"Event {event} (all channels) | Total strikes: {total_strikes:,}\n{event_start.strftime("%d-%b-%Y %H:%M")} - "
-            f"{event_end.strftime("%d-%b-%Y %H:%M %Z")}",
+            f"Event {event} (all channels) | Total strikes: {total_strikes:,}\n{event_start.strftime('%d-%b-%Y %H:%M')} - "
+            f"{event_end.strftime('%d-%b-%Y %H:%M %Z')}",
             y=0.935,
         )
         fig.savefig(
@@ -601,14 +598,13 @@ def plot_max_corr_mat(
     j_d = 0
     t_max = 0.0
     for j, station in enumerate(STATIONS):
-
         for i in range(4):
             ax = axs[i, j]
 
             if i == 0:
                 ax.set_title(station)
             if j == 0:
-                ax.set_ylabel(f"Channel {i+1}\nTime ($10^3$ s)")
+                ax.set_ylabel(f"Channel {i + 1}\nTime ($10^3$ s)")
             if i == 3:
                 ax.set_xlabel("Time ($10^3$ s)")
 
@@ -664,14 +660,13 @@ def plot_max_corr_stack(
     j_d = 0
     t_max = 0.0
     for j, station in enumerate(STATIONS):
-
         for i in range(4):
             ax = axs[i, j]
 
             if i == 0:
                 ax.set_title(station)
             if j == 0:
-                ax.set_ylabel(f"Channel {i+1}\nTime ($10^3$ s)")
+                ax.set_ylabel(f"Channel {i + 1}\nTime ($10^3$ s)")
             if i == 3:
                 ax.set_xlabel("Reduced time (s)")
 
@@ -751,7 +746,7 @@ def plot_mode_function(
         ax.plot(np.real(phi).sum(axis=1), zgrid, c="k", lw=2, label="$\\Sigma\\Phi_m$")
         ax.axhline(environment["layerdata"][0]["z"].max(), color="k", linestyle="--")
         ax.axvline(0.0, color="k")
-        ax.set_xlim(-1., 1.0)
+        ax.set_xlim(-1.0, 1.0)
         ax.set_ylim(-0.1, zgrid.max() + 0.1)
         ax.invert_yaxis()
         if i == 0:
@@ -810,11 +805,12 @@ def plot_psd_pdf(
 
     channels = [0, 1, 2, 3]
     stations = ["SHRU921/Tetra", "SHRU905/VLA1", "SHRU920/VLA2"]
-    # Reorder `data` and `data_amb` according to distance:
-    data = data[np.argsort(distance)]
-    data_amb = data_amb[np.argsort(distance)]
-    # Reorder `distance` array from low to high:
-    distance = distance[np.argsort(distance)]
+    # Reorder stations, `data`, and `data_amb` by distance, low to high:
+    order = np.argsort(distance)
+    stations = [stations[k] for k in order]
+    data = data[order]
+    data_amb = data_amb[order]
+    distance = distance[order]
 
     fig, axs = plt.subplots(
         nrows=4, ncols=3, figsize=(8, 9), gridspec_kw={"hspace": 0.05, "wspace": 0.05}
@@ -847,7 +843,7 @@ def plot_psd_pdf(
 
                 ax.plot(freq, mean, c="tab:red", lw=2, label="Mean", zorder=20)
                 ax.fill_between(
-                    freq, ucb, lcb, color="tab:red", alpha=0.25, label="95% CI"
+                    freq, ucb, lcb, color="tab:red", alpha=0.25, label="Mean ± 2σ"
                 )
                 ax.plot(
                     freq_amb,
@@ -994,14 +990,16 @@ def plot_pulse_dispersion(
 
         # Spectrogram
         ax = fig.add_subplot(inner_gs[1])
-        ax.pcolormesh(t_spec, f, SdB, shading="auto", vmin=vmin, vmax=vmax, cmap="cmo.thermal")
+        ax.pcolormesh(
+            t_spec, f, SdB, shading="auto", vmin=vmin, vmax=vmax, cmap="cmo.thermal"
+        )
         ax.text(
             0.01,
             0.975,
             stations[i],
             transform=ax.transAxes,
             va="top",
-            bbox=dict(facecolor="white", edgecolor="none", pad=1),
+            bbox={"facecolor": "white", "edgecolor": "none", "pad": 1},
         )
         ax.set_xlim(xlim)
 
@@ -1107,9 +1105,9 @@ def plot_spectrograms(
     nfft: int | None = None,
     fmin: float | None = None,
     fmax: float | None = None,
-    vmin: float = None,
-    vmax: float = None,
-    fig_size: tuple[float] = (8, 6),
+    vmin: float | None = None,
+    vmax: float | None = None,
+    fig_size: tuple[float, float] = (8.0, 6.0),
 ) -> plt.Figure:
     fs = ds.stats.sampling_rate
 
@@ -1198,7 +1196,7 @@ def plot_study_area(
     xlim = m(np.array(bounds[0]), np.ones_like(bounds[0]) * np.mean(bounds[1]))[0]
     ylim = m(np.ones_like(bounds[0]) * np.mean(bounds[0]), np.array(bounds[1]))[1]
 
-    im, ax = plot_bathy(
+    _, ax = plot_bathy(
         data,
         lonvec=m(lonvec, np.ones_like(lonvec) * np.mean(latvec))[0],
         latvec=m(np.ones_like(latvec) * np.mean(lonvec), latvec)[1],
@@ -1214,18 +1212,6 @@ def plot_study_area(
             # s=150,
             zorder=50,
             label=turbines_df.iloc[i]["Turbine"],
-        )
-        for i in range(len(turbines_df))
-    ]
-    texts = [
-        ax.text(
-            *m(turbines_df.iloc[i]["lon"], turbines_df.iloc[i]["lat"] + 0.004),
-            turbines_df.iloc[i]["Turbine"],
-            # fontsize=plt.rcParams["legend.fontsize"],
-            ha="right",
-            va="bottom",
-            zorder=50,
-            bbox=dict(facecolor="w", alpha=0.85, edgecolor="none", pad=0.5),
         )
         for i in range(len(turbines_df))
     ]
