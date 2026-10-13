@@ -8,8 +8,8 @@ February 2025
 
 import importlib.resources as pkg_resources
 import logging
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import h5py
 import numpy as np
@@ -41,14 +41,12 @@ def add_range_columns(df: pl.DataFrame, sensor_data: pl.DataFrame) -> pl.DataFra
             "Latitude [dd]"
         ].to_numpy()[0]
 
-        df = df.with_columns(
-            pl.struct(["Lon", "Lat"])
-            .map_elements(
-                lambda row: compute_range(row["Lon"], row["Lat"], lon1, lat1),
-                return_dtype=pl.Float64,
-            )
-            .alias(column_name)
+        lons = df["Lon"].to_numpy()
+        lats = df["Lat"].to_numpy()
+        ranges = compute_range(
+            lons, lats, np.full_like(lons, lon1), np.full_like(lats, lat1)
         )
+        df = df.with_columns(pl.Series(column_name, ranges, dtype=pl.Float64))
 
     return df
 
@@ -275,7 +273,7 @@ def h5_tree(grp: h5py.Group, prefix="", max_operations=None, current_operations=
         return current_operations
 
     items = len(grp)
-    for key, grp in grp.items():
+    for key, item in grp.items():
         current_operations += 1
         if max_operations is not None and current_operations >= max_operations:
             return current_operations
@@ -283,34 +281,34 @@ def h5_tree(grp: h5py.Group, prefix="", max_operations=None, current_operations=
         items -= 1
         if items == 0:
             # the last item
-            if isinstance(grp, h5py.Group):
+            if isinstance(item, h5py.Group):
                 print(f"{prefix}└── {key} (Group)")
-                for attr_key, attr_value in grp.attrs.items():
+                for attr_key, attr_value in item.attrs.items():
                     print(f"{prefix}    └── @{attr_key}: {attr_value}")
                 current_operations = h5_tree(
-                    grp, f"{prefix}    ", max_operations, current_operations
+                    item, f"{prefix}    ", max_operations, current_operations
                 )
             else:
                 try:
-                    print(f"{prefix}└── {key} ({len(grp)})")
+                    print(f"{prefix}└── {key} ({len(item)})")
                 except TypeError:
                     print(f"{prefix}└── {key} (scalar)")
-                for attr_key, attr_value in grp.attrs.items():
+                for attr_key, attr_value in item.attrs.items():
                     print(f"{prefix}    └── @{attr_key}: {attr_value}")
         else:
-            if isinstance(grp, h5py.Group):
+            if isinstance(item, h5py.Group):
                 print(f"{prefix}├── {key} (Group)")
-                for attr_key, attr_value in grp.attrs.items():
+                for attr_key, attr_value in item.attrs.items():
                     print(f"{prefix}|   └── @{attr_key}: {attr_value}")
                 current_operations = h5_tree(
-                    grp, f"{prefix}|   ", max_operations, current_operations
+                    item, f"{prefix}|   ", max_operations, current_operations
                 )
             else:
                 try:
-                    print(f"{prefix}├── {key} ({len(grp)})")
+                    print(f"{prefix}├── {key} ({len(item)})")
                 except TypeError:
                     print(f"{prefix}├── {key} (scalar)")
-                for attr_key, attr_value in grp.attrs.items():
+                for attr_key, attr_value in item.attrs.items():
                     print(f"{prefix}|   └── @{attr_key}: {attr_value}")
 
         if max_operations is not None and current_operations >= max_operations:
@@ -340,17 +338,23 @@ def initialize_julia(modules: str | Sequence[str]) -> object:
     return jl
 
 
-def load_ssp(ctd_file: Path) -> pd.DataFrame:
-    ctd_df = clean_ctd_data(pd.read_csv(ctd_file, parse_dates=["Time"]), min_depth=1.0)
-    # ctd_df = ctd_df.iloc[700:1300].sort_values("Depth")
-    # Find where the difference in depths changes sign:
-    depth_diff = ctd_df["Depth"].diff()
-    depth_diff_sign_change = depth_diff[depth_diff * depth_diff.shift(-1) < 0].index
-    # Find the index of the first occurrence of the sign change:
-    first_sign_change = depth_diff_sign_change[0]
-    # Create a new DataFrame with the first sign change:
-    ctd_df = ctd_df.iloc[:first_sign_change].sort_values("Depth")
-    return ctd_df
+def load_ssp(ctd_file: Path, min_depth: float = 1.0) -> pd.DataFrame:
+    """Load the downcast of a CTD cast as a sound speed profile.
+
+    The downcast is every sample up to the deepest one. Depth reverses many
+    times during the descent because of ship heave, so the first reversal does
+    not mark the bottom of the cast.
+
+    Args:
+        ctd_file: Path to the CTD cast CSV file.
+        min_depth: Samples at or above this depth (m) are discarded.
+
+    Returns:
+        Downcast sorted by depth, one sample per depth (rounded to 1 cm).
+    """
+    cast = pd.read_csv(ctd_file, parse_dates=["Time"])
+    downcast = cast.iloc[: int(cast["Depth"].to_numpy().argmax()) + 1].copy()
+    return clean_ctd_data(downcast, min_depth=min_depth).sort_values("Depth")
 
 
 def spectrogram_args(
