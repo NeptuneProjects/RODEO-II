@@ -62,17 +62,19 @@ function corr_matrix(data::Matrix{Float64})::Tuple{Matrix{Float64},Matrix{Int}}
 
     # Pre-allocate FFT buffers per thread to avoid repeated allocations
     n_fft = nextpow(2, 2 * n_samples - 1)  # FFT size for cross-correlation
-    max_tid = Threads.maxthreadid()
+    n_tasks = Threads.nthreads()
 
-    # Create buffers for each thread (use maxthreadid to handle thread pool size)
-    fft_buf1 = [zeros(ComplexF64, n_fft) for _ in 1:max_tid]
-    fft_buf2 = [zeros(ComplexF64, n_fft) for _ in 1:max_tid]
-    result_buf = [zeros(Float64, n_fft) for _ in 1:max_tid]
+    # Create buffers for each task. Buffers are indexed by task rather than by
+    # `Threads.threadid()`, which can change when a task migrates between
+    # threads and would let two tasks share a buffer.
+    fft_buf1 = [zeros(ComplexF64, n_fft) for _ in 1:n_tasks]
+    fft_buf2 = [zeros(ComplexF64, n_fft) for _ in 1:n_tasks]
+    result_buf = [zeros(Float64, n_fft) for _ in 1:n_tasks]
 
-    # Create separate FFT plans per thread for thread safety
+    # Create separate FFT plans per task for thread safety
     # Use FFTW.ESTIMATE to avoid expensive planning that can accumulate state
-    plans_fwd = [plan_fft!(fft_buf1[t], flags=FFTW.ESTIMATE) for t in 1:max_tid]
-    plans_inv = [plan_ifft!(fft_buf1[t], flags=FFTW.ESTIMATE) for t in 1:max_tid]
+    plans_fwd = [plan_fft!(fft_buf1[t], flags=FFTW.ESTIMATE) for t in 1:n_tasks]
+    plans_inv = [plan_ifft!(fft_buf1[t], flags=FFTW.ESTIMATE) for t in 1:n_tasks]
 
     # Work-stealing with atomic counter for perfect load balancing
     # Each thread grabs one row at a time (finest granularity)
@@ -81,13 +83,12 @@ function corr_matrix(data::Matrix{Float64})::Tuple{Matrix{Float64},Matrix{Int}}
     next_row = Threads.Atomic{Int}(rows)
     progress = Progress(rows, dt=0.5, desc="Computing cross-correlations: ")
 
-    Threads.@threads for _ in 1:Threads.nthreads()
-        tid = Threads.threadid()
-        buf1 = fft_buf1[tid]
-        buf2 = fft_buf2[tid]
-        result = result_buf[tid]
-        plan_fwd = plans_fwd[tid]
-        plan_inv = plans_inv[tid]
+    Threads.@threads :static for t in 1:n_tasks
+        buf1 = fft_buf1[t]
+        buf2 = fft_buf2[t]
+        result = result_buf[t]
+        plan_fwd = plans_fwd[t]
+        plan_inv = plans_inv[t]
 
         while true
             # Atomically grab next row (work-stealing with chunk size = 1)
@@ -132,10 +133,13 @@ function corr_matrix(data::Matrix{Float64})::Tuple{Matrix{Float64},Matrix{Int}}
                 max_idx = argmax(result)
                 ccf = result[max_idx] / (norms[i] * norms[j])
 
-                # Convert FFT index to actual lag
-                # Index 1 corresponds to lag -(n_samples-1)
-                # Index n_samples corresponds to lag 0
-                lag = max_idx - n_samples
+                # Convert FFT index to lag. The circular cross-correlation
+                # holds lags 0..n_samples-1 at indices 1..n_samples and
+                # negative lags -(n_samples-1)..-1 at the end of the buffer.
+                lag = max_idx - 1
+                if lag >= n_samples
+                    lag -= n_fft
+                end
 
                 corr[i, j] = ccf
                 corr[j, i] = ccf
@@ -223,7 +227,8 @@ end
 """
     find_efolding_time(ccf::Vector{Float64}, fs::Float64)::Float64
 
-Find the e-folding time of a cross-correlation function.
+Find the e-folding time of a cross-correlation function. Returns NaN if the
+function does not decay to 1/e of its peak.
 """
 function find_efolding_time(ccf::Vector{Float64}, fs::Float64)::Float64
     # Find peak index and value
@@ -235,7 +240,7 @@ function find_efolding_time(ccf::Vector{Float64}, fs::Float64)::Float64
     below_idx = findfirst(x -> x <= efold_value, ccf[peak_idx:end])
 
     if isnothing(below_idx)
-        return nothing
+        return NaN
     end
 
     # Adjust index to absolute position
