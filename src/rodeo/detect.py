@@ -10,10 +10,11 @@ Scripps Institution of Oceanography
 University of California San Diego
 February 2025
 """
-from dataclasses import dataclass
+
 import logging
-from pathlib import Path
 import uuid
+from dataclasses import dataclass
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -25,6 +26,8 @@ from tritonoa.data.stream import DataStream, DataStreamStats
 from tritonoa.data.time import TIME_PRECISION
 
 from rodeo.utils import compute_range
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -155,7 +158,7 @@ def event_detections(
     event_site = event["site"]
     event_start = event["start"][0:10]
 
-    logging.info(f"Analyzing event {event_name}.")
+    logger.info(f"Analyzing event {event_name}.")
 
     path = Path.cwd() / "data" / "events" / f"{event_name}_{event_start}"
     path.mkdir(parents=True, exist_ok=True)
@@ -167,7 +170,7 @@ def event_detections(
         sensor_freq = sensor.get("freq", None)
         sensor_channels = sensor["channels"]
 
-        logging.info(f"-Analayzing sensor {sensor_name}.")
+        logger.info(f"-Analayzing sensor {sensor_name}.")
 
         ds = read_inventory(
             file_path=Path(inv_config[sensor_name]["data"]["destination"]),
@@ -175,7 +178,7 @@ def event_detections(
             time_end=np.datetime64(event["end"], TIME_PRECISION),
             channels=[i["channel"] for i in sensor_channels],
         )
-        logging.info(f"-Data loaded from disk.")
+        logger.info("-Data loaded from disk.")
 
         r = _compute_range(df_equip, df_turb, sensor_name, event_site)
 
@@ -206,8 +209,8 @@ def event_detections(
             },
         )
 
-        logging.info(f"-Completed sensor {sensor_name}.")
-    logging.info(f"Completed {event_name}.")
+        logger.info(f"-Completed sensor {sensor_name}.")
+    logger.info(f"Completed {event_name}.")
 
 
 def parse_detection(grp: h5py.Group) -> DataStreamStats:
@@ -244,7 +247,7 @@ def process_stream(
     detector_filter_freq: float | None = None,
     detector_decimate_factor: int | None = None,
     station: str = "unknown",
-    dbpath: Path = Path.cwd() / "detections.h5",
+    dbpath: Path | None = None,
     metadata: dict | None = None,
 ) -> None:
     """Process a `DataStream` object and save detected pulses to an HDF5 file.
@@ -264,9 +267,12 @@ def process_stream(
         detector_filter_freq: Filter frequency for detector data (Hz).
         detector_decimate_factor: Decimation factor for detector data.
         station: Station name.
-        dbpath: Path to the HDF5 file.
+        dbpath: Path to the HDF5 file; `./detections.h5` if None.
         metadata: Metadata dictionary
     """
+    if dbpath is None:
+        dbpath = Path.cwd() / "detections.h5"
+
     # Ensure that all parameters are lists
     if not isinstance(pulse_start, list):
         pulse_start = [pulse_start] * ds.num_channels
@@ -284,17 +290,16 @@ def process_stream(
         taper = [taper] * ds.num_channels
 
     for chan in range(ds.num_channels):
-        logging.info(f"--Processing channel {chan}.")
+        logger.info(f"--Processing channel {chan}.")
         dsc = ds[chan]
+        # Copy so that detector processing never alters the pulse data.
+        dsc_det = dsc.copy()
         if detector_decimate_factor is not None:
-            dsc_det = dsc.copy()
             dsc_det.decimate(detector_decimate_factor)
-            logging.info(f"--Detector data decimated by {detector_decimate_factor}.")
-        else:
-            dsc_det = dsc
+            logger.info(f"--Detector data decimated by {detector_decimate_factor}.")
         if detector_filter_type is not None:
             dsc_det.filter(filt_type=detector_filter_type, freq=detector_filter_freq)
-            logging.info(
+            logger.info(
                 f"--Detector data filtered with {detector_filter_type} "
                 f"at {detector_filter_freq} Hz."
             )
@@ -310,9 +315,8 @@ def process_stream(
 
         if pulse_filter_type is not None:
             dsc.filter(filt_type=pulse_filter_type, freq=pulse_filter_freq)
-            logging.info(
-                f"--Pulse filtered with {pulse_filter_type} "
-                f"at {pulse_filter_freq} Hz."
+            logger.info(
+                f"--Pulse filtered with {pulse_filter_type} at {pulse_filter_freq} Hz."
             )
 
         detections = []
@@ -336,8 +340,8 @@ def process_stream(
                 )
             )
         save_detections_to_hdf5(chan, detections, dbpath)
-        logging.info(f"--Detections saved to {dbpath}.")
-        logging.info(f"--Completed channel {chan}.")
+        logger.info(f"--Detections saved to {dbpath}.")
+        logger.info(f"--Completed channel {chan}.")
 
 
 def station_from_catalogue_name(fname: Path) -> str:
@@ -355,7 +359,8 @@ def station_from_catalogue_name(fname: Path) -> str:
 def save_detections_to_hdf5(
     channel: int | str, detections: list[Detection], file_path: str
 ) -> None:
-    """Save detections to an HDF5 file.
+    """Save detections to an HDF5 file, appending to any already saved for
+    the channel.
 
     Args:
         channel: Channel number.
@@ -363,13 +368,9 @@ def save_detections_to_hdf5(
         file_path: Path to the HDF5 file.
     """
     with h5py.File(file_path, "a") as f:
-        for i, detection in enumerate(detections):
-            main_group = f"chan={str(channel)}"
-            # grp = f.create_group(f"chan={str(channel)}_det={i:04d}")
-            if main_group in f.keys():
-                grp = f[main_group]
-            else:
-                main_grp = f.create_group(main_group)
+        main_grp = f.require_group(f"chan={channel}")
+        # Number after any detections already saved for this channel.
+        for i, detection in enumerate(detections, start=len(main_grp)):
             grp = main_grp.create_group(f"det={i:04d}")
 
             # Save string attributes
