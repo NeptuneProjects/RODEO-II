@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Constructors for environment models.
 
@@ -7,13 +6,14 @@ Scripps Institution of Oceanography
 University of California San Diego
 February 2025
 """
+
 import concurrent.futures
 import copy
 
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-import scipy.fft as fft
+from scipy import fft
 from tqdm import tqdm
 from tritonoa.modeling.at.kraken import run_kraken
 from tritonoa.signal import waveforms
@@ -45,7 +45,25 @@ def compute_greens_function(
     num_points: int,
     range_m: float,
     freq: npt.NDArray[np.float64],
-) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.complex128]]:
+) -> tuple[npt.NDArray[np.complex128], npt.NDArray[np.complex128]]:
+    """Compute the Green's function between source and receiver with KRAKEN.
+
+    The Green's function is computed at the FFT frequencies within
+    `freq_bounds`, zero elsewhere, and made conjugate symmetric.
+
+    Args:
+        environment: Environment model (see `construct_environment`).
+        freq_bounds: Lower and upper frequencies (Hz) to compute.
+        fs: Sampling rate (Hz).
+        num_points: Number of FFT points.
+        range_m: Source-receiver range (m).
+        freq: FFT frequency vector of length `num_points` (Hz).
+
+    Returns:
+        Autocorrelation of the Green's function in the time domain, i.e. the
+        inverse FFT of |G(f)|^2 (not the impulse response).
+        Green's function G(f) in the frequency domain.
+    """
 
     def _enforce_symmetry(
         fft_data: npt.NDArray[np.complex128],
@@ -92,7 +110,6 @@ def compute_greens_function(
         padded_arr[computed_freq_inds, :] = arr
         return padded_arr.T.squeeze()
 
-
     env = copy.deepcopy(environment)
 
     # Define frequencies
@@ -103,23 +120,23 @@ def compute_greens_function(
 
     # Compute Green's Function in parallel
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        chan_resp_f = list(
+        greens_f = list(
             tqdm(
                 executor.map(_greens_function, computed_freqs),
                 total=len(computed_freqs),
             )
         )
-    chan_resp_f_partial = np.array(chan_resp_f)
+    greens_partial = np.array(greens_f)
 
-    chan_resp_freq = _pad_freqs(freq, freq_inds, chan_resp_f_partial)
+    greens_freq = _pad_freqs(freq, freq_inds, greens_partial)
 
-    # Make chan_resp_freq conjugate symmetric:
-    chan_resp_freq = _enforce_symmetry(chan_resp_freq)
+    # Make the Green's function conjugate symmetric:
+    greens_freq = _enforce_symmetry(greens_freq)
 
-    # Compute the IFFT of the channel response
-    chan_resp_time = fft.ifft(chan_resp_freq * np.conj(chan_resp_freq), n=num_points)
+    # Autocorrelation of the Green's function: IFFT of its power spectrum
+    greens_autocorr = fft.ifft(greens_freq * np.conj(greens_freq), n=num_points)
 
-    return chan_resp_time, chan_resp_freq
+    return greens_autocorr, greens_freq
 
 
 def construct_environment() -> dict:
