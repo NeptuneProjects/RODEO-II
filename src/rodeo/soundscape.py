@@ -12,7 +12,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-import pandas as pd
+import polars as pl
 from scipy.stats import kurtosis
 
 from rodeo.detect import Detection
@@ -298,8 +298,10 @@ def save_metrics_to_csv(all_metrics: list[Metrics], destination: Path) -> None:
         all_metrics: List of Metrics objects.
         destination: Path to the CSV file.
     """
-    df = pd.DataFrame([vars(m) for m in all_metrics]).drop("metadata", axis=1)
-    df.to_csv(destination, index=False)
+    rows = [
+        {k: v for k, v in vars(m).items() if k != "metadata"} for m in all_metrics
+    ]
+    pl.DataFrame(rows).write_csv(destination)
 
 
 def sel(x: np.ndarray, fs: float) -> float:

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-import pandas as pd
+import polars as pl
 from scipy import signal
 from tqdm import tqdm
 from tritonoa.data.reader import read_inventory
@@ -133,26 +133,21 @@ def detect_pulses(
 def event_detections(
     inv_config: dict,
     event: dict,
-    df_equip: pd.DataFrame,
-    df_turb: pd.DataFrame,
+    df_equip: pl.DataFrame,
+    df_turb: pl.DataFrame,
     pulse_filter: str | None = None,
     pulse_filt_freq: float | None = None,
 ) -> None:
 
     def _compute_range(
-        df_equip: pd.DataFrame, df_turb: pd.DataFrame, sensor_name: str, event_site: str
+        df_equip: pl.DataFrame, df_turb: pl.DataFrame, sensor_name: str, event_site: str
     ) -> float:
         # Compute the range between the sensor and the event site
-        site_lon = df_turb.loc[df_turb["Turbine"] == event_site, "lon"].values[0]
-        site_lat = df_turb.loc[df_turb["Turbine"] == event_site, "lat"].values[0]
-        sensor_lon = df_equip.loc[
-            df_equip["Name"] == sensor_name, "Longitude [dd]"
-        ].values[0]
-        sensor_lat = df_equip.loc[
-            df_equip["Name"] == sensor_name, "Latitude [dd]"
-        ].values[0]
-
-        return compute_range(sensor_lon, sensor_lat, site_lon, site_lat)
+        site = df_turb.filter(pl.col("Turbine") == event_site).row(0, named=True)
+        sensor = df_equip.filter(pl.col("Name") == sensor_name).row(0, named=True)
+        return compute_range(
+            sensor["Longitude [dd]"], sensor["Latitude [dd]"], site["lon"], site["lat"]
+        )
 
     event_name = event["name"]
     event_site = event["site"]

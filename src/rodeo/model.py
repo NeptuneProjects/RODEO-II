@@ -12,18 +12,18 @@ import copy
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
+import polars as pl
 from scipy import fft
 from tqdm import tqdm
 from tritonoa.modeling.at.kraken import run_kraken
 from tritonoa.signal import waveforms
 
 
-def build_base_environment(ctd_df: pd.DataFrame) -> dict:
+def build_base_environment(ctd_df: pl.DataFrame) -> dict:
     base_environment = construct_environment()
     layerdata = base_environment["layerdata"]
-    z = ctd_df["Depth"].values
-    c_p = ctd_df["Speed of sound"].values
+    z = ctd_df["Depth"].to_numpy()
+    c_p = ctd_df["Speed of sound"].to_numpy()
     z = np.append(z, layerdata[0]["z"].max())
     c_p = np.append(c_p, c_p[-1])
     z = np.insert(z, 0, 0.0)

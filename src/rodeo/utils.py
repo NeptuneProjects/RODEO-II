@@ -13,7 +13,6 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-import pandas as pd
 import polars as pl
 import pyproj
 
@@ -79,20 +78,23 @@ def get_welch() -> tuple[callable, bool]:
     return welch, cuda_enabled
 
 
-def clean_ctd_data(df: pd.DataFrame, min_depth: float = 1.0) -> pd.DataFrame:
-    """Remove data points with depth less than 1.0 m.
+def clean_ctd_data(df: pl.DataFrame, min_depth: float = 1.0) -> pl.DataFrame:
+    """Round depth to 1 cm, keep the last sample at each depth, and drop
+    samples at or above `min_depth` (m).
 
     Args:
         df: CTD data.
+        min_depth: Samples at or above this depth (m) are discarded.
 
     Returns:
-        Cleaned CTD data.
+        Cleaned CTD data, in the original order.
     """
-    # Round `Depth` column to two decimal points (for AT environment file)
-    df["Depth"] = df["Depth"].round(2)
-    # De-depulicate data:
-    df.drop_duplicates(subset="Depth", keep="last", inplace=True)
-    return df[df["Depth"] > min_depth]
+    # Two decimal places for the Acoustics Toolbox environment file.
+    return (
+        df.with_columns(pl.col("Depth").round(2))
+        .unique(subset="Depth", keep="last", maintain_order=True)
+        .filter(pl.col("Depth") > min_depth)
+    )
 
 
 def compute_array_size(arrays: list[np.ndarray]) -> int:
@@ -338,7 +340,7 @@ def initialize_julia(modules: str | Sequence[str]) -> object:
     return jl
 
 
-def load_ssp(ctd_file: Path, min_depth: float = 1.0) -> pd.DataFrame:
+def load_ssp(ctd_file: Path, min_depth: float = 1.0) -> pl.DataFrame:
     """Load the downcast of a CTD cast as a sound speed profile.
 
     The downcast is every sample up to the deepest one. Depth reverses many
@@ -352,9 +354,9 @@ def load_ssp(ctd_file: Path, min_depth: float = 1.0) -> pd.DataFrame:
     Returns:
         Downcast sorted by depth, one sample per depth (rounded to 1 cm).
     """
-    cast = pd.read_csv(ctd_file, parse_dates=["Time"])
-    downcast = cast.iloc[: int(cast["Depth"].to_numpy().argmax()) + 1].copy()
-    return clean_ctd_data(downcast, min_depth=min_depth).sort_values("Depth")
+    cast = pl.read_csv(ctd_file, try_parse_dates=True)
+    downcast = cast.head(int(cast["Depth"].arg_max()) + 1)
+    return clean_ctd_data(downcast, min_depth=min_depth).sort("Depth")
 
 
 def spectrogram_args(

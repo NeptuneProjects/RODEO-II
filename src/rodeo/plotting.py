@@ -16,11 +16,10 @@ import cmocean as cmo  # noqa: F401
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import polars as pl
+import pyproj
 from matplotlib import gridspec
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
-from mpl_toolkits.basemap import Basemap
 from scipy import signal
 from scipy.interpolate import interp1d
 from tritonoa.data.stream import DataStream
@@ -197,7 +196,7 @@ def plot_bathy(
 
 
 def plot_ctd_profiles(
-    df: pd.DataFrame,
+    df: pl.DataFrame,
     figsize: tuple[float, float] = (4, 3),
     gridspec_kw: dict | None = None,
     dpi: int = 150,
@@ -209,7 +208,9 @@ def plot_ctd_profiles(
     ylim = (0, 35)
 
     ax0 = axs[0]
-    ax0.plot(df["Temperature"], df["Depth"], **plot_kwargs["Temperature"])
+    ax0.plot(
+        df["Temperature"].to_numpy(), df["Depth"].to_numpy(), **plot_kwargs["Temperature"]
+    )
     ax0.set_ylim(ylim)
     ax0.invert_yaxis()
     ax0.grid()
@@ -217,7 +218,9 @@ def plot_ctd_profiles(
     ax0.set_ylabel("Depth (m)")
 
     ax1 = axs[1]
-    ax1.plot(df["Salinity"], df["Depth"], **plot_kwargs["Salinity"])
+    ax1.plot(
+        df["Salinity"].to_numpy(), df["Depth"].to_numpy(), **plot_kwargs["Salinity"]
+    )
     ax1.set_ylim(ylim)
     ax1.invert_yaxis()
     ax1.grid()
@@ -225,7 +228,9 @@ def plot_ctd_profiles(
     ax1.set_xlabel("Sal. (PSU)")
 
     ax2 = axs[2]
-    ax2.plot(df["Speed of sound"], df["Depth"], **plot_kwargs["Speed of sound"])
+    ax2.plot(
+        df["Speed of sound"].to_numpy(), df["Depth"].to_numpy(), **plot_kwargs["Speed of sound"]
+    )
     ax2.set_ylim(ylim)
     ax2.invert_yaxis()
     ax2.grid()
@@ -1163,12 +1168,31 @@ def plot_spectrograms(
     return fig
 
 
+# Marker and color of each sensor on the study area map; others are gray circles.
+SENSOR_MARKERS = {
+    "Tetra": ("^", "tab:green"),
+    "VLA1": ("v", "tab:orange"),
+    "VLA2": ("v", "tab:red"),
+}
+
+
 def plot_study_area(
     bounds: list[list[float]],
-    turbines_df: pd.DataFrame,
-    geo_equipment_df: pd.DataFrame,
-    vla_equipment_df: pd.DataFrame,
+    piles: pl.DataFrame,
+    sensors: pl.DataFrame,
 ) -> plt.Figure:
+    """Bathymetry of the study area with the piles and sensors, in a
+    transverse Mercator projection centered on the area.
+
+    Args:
+        bounds: [[lon_min, lon_max], [lat_min, lat_max]] in degrees.
+        piles: `latitude` and `longitude` of each pile.
+        sensors: `name`, `latitude`, and `longitude` of each sensor.
+
+    Returns:
+        The figure, with meridians labeled along the top and parallels along
+        the left, and a 5 km scale bar.
+    """
     req = bathyreq.BathyRequest()
     data, lonvec, latvec = req.get_area(
         longitude=bounds[0], latitude=bounds[1], size=[400, 400]
@@ -1177,92 +1201,68 @@ def plot_study_area(
     fig = plt.figure(figsize=(3.37, 2), dpi=300)
     ax = plt.gca()
 
-    m = Basemap(
-        projection="tmerc",
-        llcrnrlat=bounds[1][0],
-        urcrnrlat=bounds[1][1],
-        llcrnrlon=bounds[0][0],
-        urcrnrlon=bounds[0][1],
-        resolution="i",
-        lon_0=np.mean(lonvec),
-        lat_0=np.mean(latvec),
+    lon_0, lat_0 = np.mean(lonvec), np.mean(latvec)
+    to_map = pyproj.Transformer.from_crs(
+        "EPSG:4326",
+        f"+proj=tmerc +lon_0={lon_0} +lat_0={lat_0} +ellps=WGS84 +units=m",
+        always_xy=True,
     )
-    m.drawmeridians(
-        np.arange(bounds[0][0], bounds[0][1], 0.1), labels=[0, 0, 1, 0], ax=ax
-    )
-    m.drawparallels(
-        np.arange(bounds[1][0], bounds[1][1], 0.05), labels=[1, 0, 0, 0], ax=ax
-    )
-    xlim = m(np.array(bounds[0]), np.ones_like(bounds[0]) * np.mean(bounds[1]))[0]
-    ylim = m(np.ones_like(bounds[0]) * np.mean(bounds[0]), np.array(bounds[1]))[1]
+
+    def xy(lon, lat) -> tuple[np.ndarray, np.ndarray]:
+        lon, lat = np.broadcast_arrays(np.asarray(lon, float), np.asarray(lat, float))
+        return to_map.transform(lon, lat)
+
+    lat_mid, lon_mid = np.mean(bounds[1]), np.mean(bounds[0])
+    xlim = xy(bounds[0], lat_mid)[0]
+    ylim = xy(lon_mid, bounds[1])[1]
 
     _, ax = plot_bathy(
         data,
-        lonvec=m(lonvec, np.ones_like(lonvec) * np.mean(latvec))[0],
-        latvec=m(np.ones_like(latvec) * np.mean(lonvec), latvec)[1],
+        lonvec=xy(lonvec, np.mean(latvec))[0],
+        latvec=xy(np.mean(lonvec), latvec)[1],
         ax=ax,
     )
-    [
+
+    # Meridians and parallels, labeled where they meet the top and left edges.
+    meridians = np.arange(bounds[0][0], bounds[0][1], 0.1)
+    parallels = np.arange(bounds[1][0], bounds[1][1], 0.05)
+    lats = np.linspace(*bounds[1], 50)
+    lons = np.linspace(*bounds[0], 50)
+    grid = {"color": "k", "lw": 0.5, "dashes": (1, 1), "zorder": 40}
+    for lon in meridians:
+        ax.plot(*xy(lon, lats), **grid)
+    for lat in parallels:
+        ax.plot(*xy(lons, lat), **grid)
+    ax.set_xticks(xy(meridians, bounds[1][1])[0])
+    ax.set_xticklabels([f"{abs(lon):.4g}°{'W' if lon < 0 else 'E'}" for lon in meridians])
+    ax.xaxis.tick_top()
+    ax.set_yticks(xy(bounds[0][0], parallels)[1])
+    ax.set_yticklabels([f"{abs(lat):.4g}°{'S' if lat < 0 else 'N'}" for lat in parallels])
+    ax.tick_params(length=0)
+
+    ax.scatter(
+        *xy(piles["longitude"], piles["latitude"]),
+        marker="h",
+        c="yellow",
+        edgecolors="k",
+        zorder=50,
+        label="Turbines",
+    )
+    for sensor in sensors.iter_rows(named=True):
+        marker, color = SENSOR_MARKERS.get(sensor["name"], ("o", "0.5"))
         ax.scatter(
-            *m(turbines_df.iloc[i]["lon"], turbines_df.iloc[i]["lat"]),
-            marker="h",
-            c="yellow",
+            *xy(sensor["longitude"], sensor["latitude"]),
+            marker=marker,
+            c=color,
             edgecolors="k",
-            # linewidth=1,
-            # s=150,
             zorder=50,
-            label=turbines_df.iloc[i]["Turbine"],
+            label=sensor["name"],
         )
-        for i in range(len(turbines_df))
-    ]
-    ax.scatter(
-        *m(geo_equipment_df["Longitude [dd]"], geo_equipment_df["Latitude [dd]"]),
-        marker="^",
-        c="tab:green",
-        edgecolors="k",
-        # linewidth=1,
-        # s=150,
-        zorder=50,
-        label="Geosled",
-    )
-    ax.scatter(
-        *m(
-            vla_equipment_df.iloc[0]["Longitude [dd]"],
-            vla_equipment_df.iloc[0]["Latitude [dd]"],
-        ),
-        marker="v",
-        c="tab:orange",
-        edgecolors="k",
-        # linewidth=1,
-        # s=150,
-        zorder=50,
-        label="VLA 1",
-    )
-    ax.scatter(
-        *m(
-            vla_equipment_df.iloc[1]["Longitude [dd]"],
-            vla_equipment_df.iloc[1]["Latitude [dd]"],
-        ),
-        marker="v",
-        c="tab:red",
-        edgecolors="k",
-        # linewidth=1,
-        # s=150,
-        zorder=50,
-        label="VLA 2",
-    )
 
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
 
-    # leg = ax.legend(facecolor="white", edgecolor="black", loc="upper right")
-    # Make the legend so it only shows one symbol for all the turbines
-    handles, labels = ax.get_legend_handles_labels()
-    labels = ["Turbines", "Geosled", "VLA1", "VLA2"]
-    # handles = handles[:3]
-    leg = ax.legend(
-        handles[-4:], labels, facecolor="white", edgecolor="black", loc="upper right"
-    )
+    leg = ax.legend(facecolor="white", edgecolor="black", loc="upper right")
     leg.get_frame().set_alpha(None)
 
     scalebar = AnchoredSizeBar(

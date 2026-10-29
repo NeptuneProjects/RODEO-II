@@ -15,14 +15,13 @@ dependencies = [
     "juliacall",
     "matplotlib",
     "numpy",
-    "pandas",
     "polars",
     "pyproj",
     "scipy",
     "tqdm",
     "TritonOA @ git+ssh://git@github.com/TritonOA/TritonOA.git",
 ] # Add any dependencies here
-requires-python = "== 3.12.*"
+requires-python = ">= 3.12"
 
 [tool.setuptools.packages.find]
 where = ["src"] # Specifies where to find the package
