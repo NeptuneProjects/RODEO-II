@@ -19,7 +19,7 @@ dependencies = [
     "pyproj",
     "scipy",
     "tqdm",
-    "TritonOA @ git+ssh://git@github.com/TritonOA/TritonOA.git",
+    "TritonOA @ git+https://github.com/TritonOA/TritonOA.git",
 ] # Add any dependencies here
 requires-python = ">= 3.12"
 
