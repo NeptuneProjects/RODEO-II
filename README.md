@@ -11,7 +11,7 @@ The code is designed to work with data collected from various stations, and it i
 
 The code is provided as a Python package.
 Application of the code is found in accompanying repositories:
-- (🔒 private) [RODEO II Construction Soundscape](https://github.com/NeptuneProjects/RODEO-II_Construction-Soundscape)
+- [RODEO II Construction Soundscape](https://github.com/NeptuneProjects/RODEO-II_Construction-Soundscape)
 - [Vineyard Wind](https://github.com/NeptuneProjects/RODEO-II_VineyardWind)
 
 ## Installation
