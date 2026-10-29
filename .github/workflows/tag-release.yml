@@ -1,0 +1,38 @@
+# Tag each new version: when pyproject.toml changes on main and its version
+# has no v<version> tag yet, tag the commit and push the tag. Projects that
+# depend on rodeo pin it to these tags.
+name: Tag release
+
+on:
+  push:
+    branches: [main]
+    paths: [pyproject.toml]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the version from pyproject.toml
+        id: version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Tag the commit if the version is new
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "$TAG already exists; nothing to do."
+            exit 0
+          fi
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "$TAG"
+          echo "Tagged $GITHUB_SHA as $TAG."
