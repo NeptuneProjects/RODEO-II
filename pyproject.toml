@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rodeo" # Replace with your desired project name
-version = "0.1.0"
+version = "0.1.1"
 description = "A local Python package for project imports"
 authors = [{ name = "William F. Jenkins", email = "wfjenkins@ucsd.edu" }]
 dependencies = [
@@ -25,3 +25,7 @@ requires-python = ">= 3.12"
 
 [tool.setuptools.packages.find]
 where = ["src"] # Specifies where to find the package
+
+# Julia modules, and the Julia packages they need (juliacall installs them).
+[tool.setuptools.package-data]
+rodeo = ["*.jl", "juliapkg.json"]
